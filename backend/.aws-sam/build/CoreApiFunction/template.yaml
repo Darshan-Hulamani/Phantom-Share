@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: PhantomShare Backend Service - Serverless Temporary Content Sharing Platform
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment stage
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs20.x
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  # 1. DynamoDB Table for Metadata
+  SharesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub phantomshare-metadata-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ShareId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ShareId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      StreamSpecification:
+        StreamViewType: OLD_IMAGE
+
+  # 2. S3 Bucket for File Shares
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub phantomshare-uploads-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+            AllowedOrigins: ['*'] # In production, restrict to CloudFront domain
+            MaxAge: 3600
+
+  # 3. HTTP API Gateway
+  HttpApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub phantomshare-api-${Environment}
+      CorsConfiguration:
+        AllowHeaders: ['Content-Type', 'Authorization']
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowOrigins: ['*']
+
+  # 4. Core API Lambda Function (Handles all API requests)
+  CoreApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub phantomshare-core-api-${Environment}
+      Handler: src/handlers/api.handler
+      CodeUri: .
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref SharesTable
+          BUCKET_NAME: !Ref UploadsBucket
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SharesTable
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+      Events:
+        ProxyRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApiGateway
+            Path: /{proxy+}
+            Method: ANY
+
+  # 5. Cleanup Lambda Function (Triggered by DynamoDB TTL expiration stream to delete files from S3)
+  CleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub phantomshare-cleanup-${Environment}
+      Handler: src/handlers/cleanup.handler
+      CodeUri: .
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref UploadsBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+      Events:
+        DdbStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SharesTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 10
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["REMOVE"]}'
+
+  # 6. S3 Bucket for Frontend Static Website Hosting
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub phantomshare-frontend-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${FrontendBucket}/*'
+
+  # 7. CloudFront Distribution to serve Frontend and proxy API requests
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          # Frontend static files origin
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          # Backend API Gateway origin
+          - Id: ApiGatewayOrigin
+            DomainName: !Sub "${HttpApiGateway}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CacheBehaviors:
+          # Route all /shares and subpaths requests to the API Gateway origin
+          - PathPattern: /shares*
+            TargetOriginId: ApiGatewayOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            ForwardedValues:
+              QueryString: true
+              Headers: ['*']
+              Cookies:
+                Forward: all
+            MinTTL: 0
+            DefaultTTL: 0
+            MaxTTL: 0
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway Endpoint URL
+    Value: !Sub https://${HttpApiGateway}.execute-api.${AWS::Region}.amazonaws.com
+  UploadsBucketName:
+    Description: Name of the uploads S3 bucket
+    Value: !Ref UploadsBucket
+  FrontendBucketName:
+    Description: Name of the frontend S3 bucket
+    Value: !Ref FrontendBucket
+  CloudFrontURL:
+    Description: Public CloudFront CDN URL (Use this to access PhantomShare publicly!)
+    Value: !Sub https://${CloudFrontDistribution}.cloudfront.net
+

@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: PhantomShare Backend Service - Serverless Temporary Content Sharing Platform
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+    - dev
+    - prod
+    Description: Environment stage
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: nodejs20.x
+    LoggingConfig:
+      LogFormat: JSON
+Resources:
+  SharesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: phantomshare-metadata-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: ShareId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: ShareId
+        KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      StreamSpecification:
+        StreamViewType: OLD_IMAGE
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: phantomshare-uploads-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+        - AllowedHeaders:
+          - '*'
+          AllowedMethods:
+          - GET
+          - PUT
+          - POST
+          - DELETE
+          - HEAD
+          AllowedOrigins:
+          - '*'
+          MaxAge: 3600
+  HttpApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name:
+        Fn::Sub: phantomshare-api-${Environment}
+      CorsConfiguration:
+        AllowHeaders:
+        - Content-Type
+        - Authorization
+        AllowMethods:
+        - GET
+        - POST
+        - OPTIONS
+        AllowOrigins:
+        - '*'
+  CoreApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: phantomshare-core-api-${Environment}
+      Handler: src/handlers/api.handler
+      CodeUri: CoreApiFunction
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: SharesTable
+          BUCKET_NAME:
+            Ref: UploadsBucket
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: SharesTable
+      - S3CrudPolicy:
+          BucketName:
+            Ref: UploadsBucket
+      Events:
+        ProxyRoute:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: HttpApiGateway
+            Path: /{proxy+}
+            Method: ANY
+    Metadata:
+      SamResourceId: CoreApiFunction
+  CleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: phantomshare-cleanup-${Environment}
+      Handler: src/handlers/cleanup.handler
+      CodeUri: CleanupFunction
+      Environment:
+        Variables:
+          BUCKET_NAME:
+            Ref: UploadsBucket
+      Policies:
+      - S3CrudPolicy:
+          BucketName:
+            Ref: UploadsBucket
+      Events:
+        DdbStream:
+          Type: DynamoDB
+          Properties:
+            Stream:
+              Fn::GetAtt:
+              - SharesTable
+              - StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 10
+            FilterCriteria:
+              Filters:
+              - Pattern: '{"eventName": ["REMOVE"]}'
+    Metadata:
+      SamResourceId: CleanupFunction
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: phantomshare-frontend-${Environment}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: PublicReadGetObject
+          Effect: Allow
+          Principal: '*'
+          Action: s3:GetObject
+          Resource:
+            Fn::Sub: arn:aws:s3:::${FrontendBucket}/*
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+        - Id: FrontendS3Origin
+          DomainName:
+            Fn::GetAtt:
+            - FrontendBucket
+            - RegionalDomainName
+          S3OriginConfig:
+            OriginAccessIdentity: ''
+        - Id: ApiGatewayOrigin
+          DomainName:
+            Fn::Sub: ${HttpApiGateway}.execute-api.${AWS::Region}.amazonaws.com
+          CustomOriginConfig:
+            HTTPPort: 80
+            HTTPSPort: 443
+            OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          CachedMethods:
+          - GET
+          - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CacheBehaviors:
+        - PathPattern: /shares*
+          TargetOriginId: ApiGatewayOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          - PUT
+          - POST
+          - PATCH
+          - DELETE
+          CachedMethods:
+          - GET
+          - HEAD
+          ForwardedValues:
+            QueryString: true
+            Headers:
+            - '*'
+            Cookies:
+              Forward: all
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway Endpoint URL
+    Value:
+      Fn::Sub: https://${HttpApiGateway}.execute-api.${AWS::Region}.amazonaws.com
+  UploadsBucketName:
+    Description: Name of the uploads S3 bucket
+    Value:
+      Ref: UploadsBucket
+  FrontendBucketName:
+    Description: Name of the frontend S3 bucket
+    Value:
+      Ref: FrontendBucket
+  CloudFrontURL:
+    Description: Public CloudFront CDN URL (Use this to access PhantomShare publicly!)
+    Value:
+      Fn::Sub: https://${CloudFrontDistribution}.cloudfront.net
