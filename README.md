@@ -1,27 +1,31 @@
 # 👻 PhantomShare
 
-**PhantomShare** is a secure, serverless temporary file and text sharing platform built on AWS. It allows users to share files, text, and code snippets through unique links that automatically expire or self-destruct after being viewed.
+**A secure, serverless temporary file & text sharing platform, built on AWS.**
 
-Designed with a cloud-native architecture, PhantomShare leverages AWS Serverless services to provide scalability, security, and zero server management.
+PhantomShare lets users share files, text, and code snippets through unique links that automatically expire — or self-destruct after being viewed. Built on a cloud-native architecture, it leverages AWS serverless services for scalability, security, and zero server management.
+
+📖 **Want the full build-from-scratch walkthrough?** See **[BUILD_GUIDE.md](./BUILD_GUIDE.md)** for step-by-step setup, deployment, and troubleshooting instructions.
 
 ---
 
 ## 🚀 Features
 
-- 📁 Secure File Sharing
-- 📝 Text Sharing
-- 💻 Code Snippet Sharing
-- 🔐 Password-Protected Shares
-- 🔥 Burn After View
-- ⏳ Auto Expiration using DynamoDB TTL
-- ☁️ Direct S3 Upload using Pre-signed URLs
-- 📊 View & Download Tracking
-- 🌍 Global Delivery using CloudFront
-- ⚡ Fully Serverless Architecture
+| | |
+|---|---|
+| 📁 | Secure file sharing |
+| 📝 | Text sharing |
+| 💻 | Code snippet sharing |
+| 🔐 | Password-protected shares |
+| 🔥 | Burn after view |
+| ⏳ | Auto expiration via DynamoDB TTL |
+| ☁️ | Direct S3 upload via pre-signed URLs |
+| 📊 | View & download tracking |
+| 🌍 | Global delivery via CloudFront |
+| ⚡ | Fully serverless architecture |
 
 ---
 
-# 🏗️ Architecture
+## 🏗️ Architecture
 
 ```
 Client (React + Vite)
@@ -33,10 +37,10 @@ CloudFront CDN
    S3 Frontend Hosting
         │
         ▼
-API Gateway
+   API Gateway
         │
         ▼
-AWS Lambda
+   AWS Lambda
         │
  ┌──────┼─────────┐
  ▼      ▼         ▼
@@ -47,20 +51,20 @@ Temporary Files
 Metadata + TTL
 ```
 
+> For the full request/response flow — including the DynamoDB Streams → Cleanup Lambda cycle that deletes expired files — see the [Architecture section of the Build Guide](./BUILD_GUIDE.md#1--system-architecture).
+
 ---
 
-# 🛠 Tech Stack
+## 🛠 Tech Stack
 
-## Frontend
-
+**Frontend**
 - React
 - Vite
 - JavaScript
 - CSS
 - Lucide React
 
-## Backend
-
+**Backend**
 - AWS Lambda
 - API Gateway
 - DynamoDB
@@ -72,7 +76,7 @@ Metadata + TTL
 
 ---
 
-# 📂 Project Structure
+## 📂 Project Structure
 
 ```
 PhantomShare/
@@ -98,104 +102,92 @@ PhantomShare/
 
 ---
 
-# ⚙️ Installation
+## ⚙️ Installation
 
-## Clone Repository
-
+**Clone the repository**
 ```bash
 git clone https://github.com/YOUR_USERNAME/PhantomShare.git
-
 cd PhantomShare
 ```
 
-## Install Frontend
-
+**Install frontend dependencies**
 ```bash
 npm install
 ```
 
-## Install Backend
-
+**Install backend dependencies**
 ```bash
 cd backend
-
 npm install
 ```
 
 ---
 
-# ▶️ Run Locally
+## ▶️ Run Locally
 
-Frontend
-
+**Frontend**
 ```bash
 npm run dev
 ```
 
-Backend
-
+**Backend**
 ```bash
 sam build
-
 sam local start-api
 ```
 
 ---
 
-# 🚀 Deployment
+## 🚀 Deployment
 
-Backend
-
+**Backend**
 ```bash
 sam build
-
 sam deploy --guided
 ```
 
-Frontend
-
+**Frontend**
 ```bash
 npm run build
-
 aws s3 sync dist/ s3://YOUR_BUCKET_NAME
-
 aws cloudfront create-invalidation \
---distribution-id YOUR_DISTRIBUTION_ID \
---paths "/*"
+  --distribution-id YOUR_DISTRIBUTION_ID \
+  --paths "/*"
 ```
 
----
-
-# 🔐 Security Features
-
-- Password Protected Shares
-- Pre-signed Upload URLs
-- Pre-signed Download URLs
-- Automatic File Deletion
-- Automatic Metadata Cleanup
-- IAM Based Access Control
+> 🔎 Need the detailed, screenshot-level version of these steps — including AWS IAM setup and SAM template internals? Check **[BUILD_GUIDE.md](./BUILD_GUIDE.md)**.
 
 ---
 
-# 📈 Future Enhancements
+## 🔐 Security Features
 
-- User Authentication
-- Email Sharing
-- QR Code Sharing
-- Multiple File Upload
-- File Preview
-- Drag & Drop Upload
-- Share Analytics Dashboard
-- Mobile Responsive UI
+- Password-protected shares
+- Pre-signed upload URLs
+- Pre-signed download URLs
+- Automatic file deletion
+- Automatic metadata cleanup
+- IAM-based access control
 
 ---
 
-# 👨‍💻 Author
+## 📈 Future Enhancements
+
+- User authentication
+- Email sharing
+- QR code sharing
+- Multiple file upload
+- File preview
+- Drag & drop upload
+- Share analytics dashboard
+- Mobile responsive UI
+
+---
+
+## 👨‍💻 Author
 
 **Darshan Hulamani**
-
-- GitHub: https://github.com/Darshan-Hulamani
-- LinkedIn: https://www.linkedin.com/in/darshan-hulamani
+- GitHub: [github.com/Darshan-Hulamani](https://github.com/Darshan-Hulamani)
+- LinkedIn: [linkedin.com/in/darshan-hulamani](https://www.linkedin.com/in/darshan-hulamani)
 
 ---
 
